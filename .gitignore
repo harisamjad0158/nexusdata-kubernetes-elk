@@ -1,37 +1,12 @@
-# Secrets and generated credentials
 .local-certs/
 .env
 .env.*
 !.env.example
-*passwords.env
 *.key
 *.pem
 *.p12
 *.pfx
-
-# Kubernetes credentials
-.kube/
-kubeconfig
-kubeconfig.*
-
-# Local data and logs
 *.log
-*.tmp
-data/
-logs/
-backups/
-
-# Python
-__pycache__/
-*.pyc
-.venv/
-
-# Editors and operating systems
-.vscode/
-.idea/
-.DS_Store
-Thumbs.db
-
-# Local backups
 *.bak
 *.before-probe-fix
+.kube/
