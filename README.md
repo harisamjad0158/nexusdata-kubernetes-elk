@@ -1,6 +1,7 @@
 # NexusData — Enterprise Real-Time Log Analytics & Event Streaming Platform
 
 A security-conscious **KinD portfolio reference deployment** using Elasticsearch 8.11.1, Logstash, and Kibana on **one control-plane and two worker nodes**. It demonstrates persistence, strict worker anti-affinity, TLS, HTTP event ingestion, and verification. **Not production-ready without the hardening noted below.**
+<img width="1672" height="941" alt="NexusData Real-Time Log Analytics Architecture" src="https://github.com/user-attachments/assets/4121d7e4-2d79-46a3-9ee7-33d7aa081c7c" />
 
 ## Important engineering decisions
 
@@ -133,3 +134,6 @@ curl --cacert .local-certs/ca.crt -u "elastic:$ELASTIC_PASSWORD" \
 - `cluster.initial_master_nodes` is for **initial cluster bootstrapping** only. Remove it after the cluster forms and before subsequent long-term operation or re-bootstrap procedures; never casually re-bootstrap an existing cluster.
 - A third **voting-only** Elasticsearch node participates in voting but cannot become elected master. This design can tolerate one data-node loss if quorum is healthy, but it is still a **local lab** rather than an enterprise multi-AZ production topology.
 - All examples are intended for a dedicated, trusted lab cluster; review RBAC, security context and admission policies before reuse elsewhere.
+
+- <img width="533" height="232" alt="{6E836D12-5CF2-48EC-AE9C-4327861F7058}" src="https://github.com/user-attachments/assets/b39d65bc-2e17-4ccc-a317-a59cd239419c" />
+
