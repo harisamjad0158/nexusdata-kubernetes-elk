@@ -1,0 +1,39 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: elasticsearch-settings
+  namespace: nexusdata
+  labels:
+    app.kubernetes.io/part-of: nexusdata
+data:
+  ES_JAVA_OPTS: '-Xms384m -Xmx384m'
+  cluster.name: nexusdata-es
+  discovery.seed_hosts: 'es-0.es-headless.nexusdata.svc.cluster.local,es-1.es-headless.nexusdata.svc.cluster.local,es-witness.nexusdata.svc.cluster.local'
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: logstash-pipeline
+  namespace: nexusdata
+  labels:
+    app.kubernetes.io/part-of: nexusdata
+data:
+  logstash.conf: |
+    input {
+      http { port => 5044 codec => json }
+    }
+    filter {
+      if ![event_type] { mutate { add_field => { "event_type" => "unknown" } } }
+      mutate { add_field => { "[@metadata][target_index]" => "nexusdata-events" } }
+    }
+    output {
+      elasticsearch {
+        hosts => ["https://es-http.nexusdata.svc.cluster.local:9200"]
+        user => "${ES_USERNAME}"
+        password => "${ES_PASSWORD}"
+        ssl_enabled => true
+        ssl_certificate_authorities => ["/usr/share/logstash/config/certs/ca.crt"]
+        index => "%{[@metadata][target_index]}"
+      }
+      stdout { codec => rubydebug }
+    }

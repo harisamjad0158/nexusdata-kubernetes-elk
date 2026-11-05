@@ -1,0 +1,193 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: es-headless
+  namespace: nexusdata
+  labels: {app: elasticsearch, app.kubernetes.io/part-of: nexusdata}
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector: {app: elasticsearch}
+  ports:
+    - {name: transport, port: 9300, targetPort: 9300}
+    - {name: https, port: 9200, targetPort: 9200}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: es-http
+  namespace: nexusdata
+  labels: {app: elasticsearch, app.kubernetes.io/part-of: nexusdata}
+spec:
+  selector: {app: elasticsearch}
+  ports:
+    - {name: https, port: 9200, targetPort: 9200}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: es-witness
+  namespace: nexusdata
+  labels: {app: es-witness, app.kubernetes.io/part-of: nexusdata}
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector: {app: es-witness}
+  ports:
+    - {name: transport, port: 9300, targetPort: 9300}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: es
+  namespace: nexusdata
+  labels: {app: elasticsearch, app.kubernetes.io/part-of: nexusdata}
+spec:
+  serviceName: es-headless
+  replicas: 2
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels: {app: elasticsearch}
+  template:
+    metadata:
+      labels: {app: elasticsearch, app.kubernetes.io/part-of: nexusdata}
+    spec:
+      securityContext: {fsGroup: 1000}
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: In
+                    values:
+                      - nexusdata-cluster-worker
+                      - nexusdata-cluster-worker2
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels: {app: elasticsearch}
+              topologyKey: kubernetes.io/hostname
+      terminationGracePeriodSeconds: 120
+      containers:
+        - name: elasticsearch
+          image: docker.elastic.co/elasticsearch/elasticsearch:8.11.1
+          imagePullPolicy: IfNotPresent
+          env:
+            - {name: node.name, valueFrom: {fieldRef: {fieldPath: metadata.name}}}
+            - {name: cluster.name, value: nexusdata-es}
+            - {name: discovery.seed_hosts, valueFrom: {configMapKeyRef: {name: elasticsearch-settings, key: discovery.seed_hosts}}}
+            - {name: cluster.initial_master_nodes, value: 'es-0,es-1,es-witness'}
+            - {name: node.roles, value: 'master,data,ingest'}
+            - {name: ES_JAVA_OPTS, valueFrom: {configMapKeyRef: {name: elasticsearch-settings, key: ES_JAVA_OPTS}}}
+            - {name: ELASTIC_PASSWORD, valueFrom: {secretKeyRef: {name: nexusdata-credentials, key: elastic-password}}}
+            - {name: xpack.security.enabled, value: 'true'}
+            - {name: xpack.security.http.ssl.enabled, value: 'true'}
+            - {name: xpack.security.http.ssl.key, value: /usr/share/elasticsearch/config/certs/tls.key}
+            - {name: xpack.security.http.ssl.certificate, value: /usr/share/elasticsearch/config/certs/tls.crt}
+            - {name: xpack.security.http.ssl.certificate_authorities, value: /usr/share/elasticsearch/config/certs/ca.crt}
+            - {name: xpack.security.transport.ssl.enabled, value: 'true'}
+            - {name: xpack.security.transport.ssl.verification_mode, value: certificate}
+            - {name: xpack.security.transport.ssl.key, value: /usr/share/elasticsearch/config/certs/tls.key}
+            - {name: xpack.security.transport.ssl.certificate, value: /usr/share/elasticsearch/config/certs/tls.crt}
+            - {name: xpack.security.transport.ssl.certificate_authorities, value: /usr/share/elasticsearch/config/certs/ca.crt}
+          ports:
+            - {name: https, containerPort: 9200}
+            - {name: transport, containerPort: 9300}
+          resources:
+            requests: {cpu: 150m, memory: 640Mi}
+            limits: {cpu: 750m, memory: 1Gi}
+          readinessProbe:
+            tcpSocket: {port: 9200}
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            failureThreshold: 12
+          livenessProbe:
+            tcpSocket: {port: 9200}
+            initialDelaySeconds: 90
+            periodSeconds: 20
+            failureThreshold: 6
+          volumeMounts:
+            - {name: data, mountPath: /usr/share/elasticsearch/data}
+            - {name: certs, mountPath: /usr/share/elasticsearch/config/certs, readOnly: true}
+      volumes:
+        - name: certs
+          secret: {secretName: nexusdata-tls, defaultMode: 0440}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels: {app.kubernetes.io/part-of: nexusdata}
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: nexusdata-retain
+        resources:
+          requests: {storage: 5Gi}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: es-witness
+  namespace: nexusdata
+  labels: {app: es-witness, app.kubernetes.io/part-of: nexusdata}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: es-witness}
+  template:
+    metadata:
+      labels: {app: es-witness, app.kubernetes.io/part-of: nexusdata}
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: nexusdata-cluster-control-plane
+      tolerations:
+        - {key: node-role.kubernetes.io/control-plane, operator: Exists, effect: NoSchedule}
+      securityContext: {fsGroup: 1000}
+      containers:
+        - name: elasticsearch
+          image: docker.elastic.co/elasticsearch/elasticsearch:8.11.1
+          env:
+            - {name: node.name, value: es-witness}
+            - {name: cluster.name, value: nexusdata-es}
+            - {name: node.roles, value: 'master,voting_only'}
+            - {name: discovery.seed_hosts, valueFrom: {configMapKeyRef: {name: elasticsearch-settings, key: discovery.seed_hosts}}}
+            - {name: cluster.initial_master_nodes, value: 'es-0,es-1,es-witness'}
+            - {name: ES_JAVA_OPTS, value: '-Xms256m -Xmx256m'}
+            - {name: ELASTIC_PASSWORD, valueFrom: {secretKeyRef: {name: nexusdata-credentials, key: elastic-password}}}
+            - {name: xpack.security.enabled, value: 'true'}
+            - {name: xpack.security.http.ssl.enabled, value: 'true'}
+            - {name: xpack.security.http.ssl.key, value: /usr/share/elasticsearch/config/certs/tls.key}
+            - {name: xpack.security.http.ssl.certificate, value: /usr/share/elasticsearch/config/certs/tls.crt}
+            - {name: xpack.security.http.ssl.certificate_authorities, value: /usr/share/elasticsearch/config/certs/ca.crt}
+            - {name: xpack.security.transport.ssl.enabled, value: 'true'}
+            - {name: xpack.security.transport.ssl.verification_mode, value: certificate}
+            - {name: xpack.security.transport.ssl.key, value: /usr/share/elasticsearch/config/certs/tls.key}
+            - {name: xpack.security.transport.ssl.certificate, value: /usr/share/elasticsearch/config/certs/tls.crt}
+            - {name: xpack.security.transport.ssl.certificate_authorities, value: /usr/share/elasticsearch/config/certs/ca.crt}
+          resources:
+            requests: {cpu: 75m, memory: 384Mi}
+            limits: {cpu: 350m, memory: 640Mi}
+          ports:
+            - {containerPort: 9300, name: transport}
+          readinessProbe:
+            tcpSocket: {port: 9300}
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          startupProbe:
+            tcpSocket:
+              port: 9300
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 60
+          livenessProbe:
+            tcpSocket: {port: 9300}
+            initialDelaySeconds: 90
+            periodSeconds: 20
+          volumeMounts:
+            - {name: certs, mountPath: /usr/share/elasticsearch/config/certs, readOnly: true}
+            - {name: witness-data, mountPath: /usr/share/elasticsearch/data}
+      volumes:
+        - name: certs
+          secret: {secretName: nexusdata-tls, defaultMode: 0440}
+        - name: witness-data
+          emptyDir: {}
